@@ -1,0 +1,409 @@
+#!/usr/bin/env python3
+#   This program is free software: you can redistribute it and/or modify
+#   it under the terms of the GNU General Public License as published by
+#   the Free Software Foundation, either version 3 of the License, or
+#   (at your option) any later version.
+#   This program is distributed in the hope that it will be useful,
+#   but WITHOUT ANY WARRANTY; without even the implied warranty of
+#   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+#   GNU General Public License for more details.
+
+#   You should have received a copy of the GNU General Public License
+#   along with this program.  If not, see <http://www.gnu.org/licenses/>.
+
+import sys
+import socket
+import selectors
+import types
+import time
+import string
+import getopt
+
+assert sys.version_info >= (3, 5), "Must run in Python version 3.5 or above"
+
+
+class PercentComplete:
+
+    def __init__(self, tInc):
+        self.old_time = time.perf_counter()
+        self.tInc = tInc
+
+    def print_percent(self, percent):
+        newTime = time.perf_counter()
+        if (newTime - self.old_time) > self.tInc:
+            print(" %3.1f percent complete...." % round(percent, 1), end='\r')
+            self.old_time = newTime
+
+
+# Count number of lines in a file
+def line_count(f):
+    for (i, l) in enumerate(f):
+        pass
+    f.seek(0)
+    return i + 1
+
+
+def open_file(filaname):
+    len = float('inf')
+    if filaname is not None:
+        try:
+            f = open(filaname, 'r')
+            print("Playing file '%s', Type Ctrl-C to exit..." % filaname)
+        except FileNotFoundError:
+            print("File '%s' not found, exiting." % filaname)
+            sys.exit(1)
+        len = line_count(f)
+    else:
+        f = sys.stdin
+    return (f, Len)
+
+
+def get_next_message(f, delay, speed):
+    if f:
+        mess = f.readline()
+    else:
+        print("End of file reached...")
+        return False
+    if len(mess) == 0:
+        return False
+    mess = mess.strip()
+    if delay > 0:
+        delay_message(mess, delay, speed)
+    mess = mess + u"\r\n"
+    return mess.encode("utf-8")
+
+
+def delay_message(mess, delay, speed):
+    global initialdelta
+    global starttime
+
+    # Check if it is a NMEAv4 message with timestamp
+    try:
+        messtime = int(mess.split("*")[0].split(":")[2])
+    except ValueError:
+        time.sleep(delay)
+    else:
+        try:
+            initialdelta
+        except NameError:
+            print("NMEAv4 timestamp found. Replaying logs at %3.2fx speed, "
+                  "instead of using delay." % speed)
+            starttime = time.time()
+            initialdelta = starttime - messtime
+        computed_delay = (messtime + initialdelta - speed * time.time()
+                         + (speed - 1) * starttime)
+        if computed_delay > 60:
+            print("Huge gap in file. Not waiting %d seconds." % computed_delay)
+            starttime = time.time()
+            initialdelta = starttime - messtime
+            computed_delay = 0
+        if computed_delay > 0:
+            time.sleep(computed_delay)
+
+
+def udp(dest, port, filaname, delay, repeat, speed):
+    if dest is None:
+        dest = socket.gethostbyname(socket.gethostname())
+    # End if
+    if port is None:
+        port = 10110
+    # End if
+    f = False
+    sock = False
+    try:
+        (f, len) = open_file(filaname)
+        if len > 0:
+            print("  UDP target IP: " + dest)
+            print("UDP target port: " + str(port))
+            print("Inserting %3.2f mS delay between each message." %
+                  (delay * 1000))
+        sock = socket.socket(socket.AF_INET,    # Internet
+                             socket.SOCK_DGRAM)  # UDP
+        # Allow UDP broadcast
+        sock.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
+        count = 0
+        pct = PercentComplete(5.0)
+        while True:
+            next_message = get_next_message(f, delay, speed)
+            count = count + 1
+            pct.print_percent(count / len * 100)
+            if not next_message:
+                print("")
+                repeat -= 1
+                if repeat > 0:
+                    f.seek(0)
+                    count = 0
+                    old_time = time.perf_counter()
+                    if repeat > 1:
+                        print("Repeating file...%d more times." % repeat)
+                    else:
+                        print("Repeating file...%d more time." % repeat)
+                    continue
+                return True
+            sock.sendto(next_message, (dest, port))
+    except KeyboardInterrupt:
+        print("\nKeyboardInterrupt.")
+        return True
+    except Exception as ex:
+        print("Exception...")
+        print(ex)
+        raise ex
+    finally:
+        if sock:
+            sock.close()
+        if f:
+            f.close()
+
+
+# Now we create the TCP version.
+# It's more complex because we want to
+# accept multiple client connections
+# simultaneously.
+
+sel = selectors.DefaultSelector()
+
+
+def accept_wrapper(sock):
+    conn, addr = sock.accept()
+    conn.setblocking(False)
+    data = types.SimpleNamespace(addr=addr, outb=b"")
+    events = selectors.EVENT_READ | selectors.EVENT_WRITE
+    sel.register(conn, events, data=data)
+    print("Accepted connection from client: ", data.addr)
+
+
+def service_connection(key, mask):
+    sock = key.fileobj
+    data = key.data
+    if mask & selectors.EVENT_READ:
+        recv_data = sock.recv(1024)  # Should be ready to read
+        print(str(len(recv_data)) + " characters received...")
+        if not recv_data:
+            print("Closing connection to client:", sock)
+            sel.unregister(sock)
+            sock.close()
+            return False
+    if mask & selectors.EVENT_WRITE:
+        if data.outb:
+            sent = sock.send(data.outb)  # Should be ready to write
+            data.outb = data.outb[sent:]
+    return True
+
+
+def tcp(host, port, filaname, delay, repeat, speed):
+    if host is None:
+        host = socket.gethostbyname(socket.gethostname())
+    host = socket.gethostbyname(host)
+    if port is None:
+        port = 2947
+    events = False
+    f = False
+    server = False
+    try:
+        server_address = (host, port)
+        server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        server.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, True)
+        server.bind(server_address)
+        server.listen(5)
+        listening = server.getsockname()
+        server.setblocking(False)
+        sel.register(server, selectors.EVENT_READ, data=None)
+        (f, len) = open_file(filaname)
+        if len > 0:
+            print("Server at address: " + str(listening[0]) +
+                  " is listening on port: " + str(listening[1]))
+        count = 0
+        pct = PercentComplete(5.0)
+        while True:
+            mess = get_next_message(f, delay, speed)
+            count = count + 1
+            pct.print_percent(count / len * 100)
+            if not mess:
+                print("")
+                repeat -= 1
+                if repeat > 0:
+                    f.seek(0)
+                    count = 0
+                    if repeat > 1:
+                        print("Repeating file...%d more times." % repeat)
+                    else:
+                        print("Repeating file...%d more time." % repeat)
+                    continue
+                else:
+                    return True
+            events = sel.select()
+            for key, mask in events:
+                if key.data is None:
+                    accept_wrapper(key.fileobj)
+                else:
+                    try:
+                        key.data.outb += mess
+                        service_connection(key, mask)
+                    except ConnectionError as CE:
+                        print(CE)
+                        print("ConnectionError: Attempting to close connection"
+                              " to client:", key.data.addr)
+                        sock = key.fileobj
+                        sel.unregister(sock)
+                        sock.close()
+                    except TimeoutError as TO:
+                        print(TO)
+                        print("TimeoutError: Attempting to close connection"
+                              " to client:", key.data.addr)
+                        sock = key.fileobj
+                        sel.unregister(sock)
+                        sock.close()
+    except KeyboardInterrupt:
+        print("\nKeyboardInterrupt...")
+        return True
+    except Exception as ex:
+        print("Exception...")
+        print(ex)
+        raise ex
+
+    finally:
+        if events:
+            for key, mask in events:
+                print("Finally: Attempting to close connection"
+                      " to client:", key.data.addr)
+                sock = key.fileobj
+                sel.unregister(sock)
+                sock.close()
+        if server:
+            server.close()
+        if f:
+            f.close()
+
+def usage():
+    print("USAGE:")
+    print("[python3] VDRplayer.py [--port=Port#] [--sleep=Sleep time] "
+          "[--TCP --host=localhost | --UDP --dest=UDP_IP_Address] InputFile\n")
+    print("Commandline options:\n")
+    print("-d, --dest=IP_Address  UDP destination IP address.")
+    print("                       Default will resolve to 'localhost'\n")
+    print("-h, --help             print this message.\n")
+    print("-o, --host=IP_Address  TCP server IP address.")
+    print("                       This must resolve to a valid IP address on"
+          " this computer.\n")
+    print("-p, --port=#           optional communication port number.")
+    print("                       Any valid port is accepted.\n")
+    print("-r, --repeat=#         optional number of times to reread input"
+          " file.\n")
+    print("-s, --sleep=#.#        optional seconds delay between packets,")
+    print("                       when there is no NMEAv4 timestamp [0.1s]")
+    print("-f, --fast=#.#         optional speed acceleration factor if.")
+    print("                       NMEAv4 [1]\n")
+    print("-t, --TCP              create TCP server on primary IP address.")
+    print("                       Specify local IP address using --host option"
+          "\n                       to override default primary address.\n")
+    print("-u, --UDP              create connectionless UDP link.")
+    print("                       UDP is the default if no connection type"
+          " specified.")
+    print("                       Specify destination IP address using --dest"
+          " option.\n")
+    print("InputFile              Name of file containing NMEA message strings"
+          ".")
+    print("                       If no FILE is given then default is to read")
+    print("                       input text from STDIN.\n")
+    print("Options are case sensitive.")
+    return
+
+
+# This method returns the "primary" IP on the local box
+# (the one with a default route).
+def get_ip():
+    s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    try:
+        # doesn't even have to be reachable
+        s.connect(('10.255.255.255', 1))
+        ip = s.getsockname()[0]
+    except Exception:
+        ip = '127.0.0.1'
+    finally:
+        s.close()
+    return ip
+
+
+def main():
+    # Set default options
+    mode = 'UDP'
+    dest = None
+    host = None
+    ip_port = None
+    td = 0.1
+    repeat = 1
+    rcode = False
+    speed = 1
+
+    # Pick up all commandline options
+    try:
+        options, remainder = getopt.gnu_getopt(sys.argv[1:], 'd:ho:p:rs:utf:',
+                                               ['dest=',
+                                                'help',
+                                                'host=',
+                                                'port=',
+                                                'repeat=',
+                                                'sleep=',
+                                                'UDP',
+                                                'TCP',
+                                                'fast='])
+        for opt, arg in options:
+            if opt.lower() in ('-d', '--dest'):
+                mode = 'UDP'
+                dest = arg
+            elif opt.lower() in ('-p', '--port'):
+                ip_port = int(arg)
+            elif opt.lower() in ('-s', '--sleep'):
+                td = float(arg)
+            elif opt.lower() in ('-u', '--udp'):
+                mode = 'UDP'
+            elif opt.lower() in ('-t', '--tcp'):
+                mode = 'TCP'
+            elif opt in ('-o', '--host'):
+                mode = 'TCP'
+                host = arg
+            elif opt in ('-f', '--fast'):
+                speed = float(arg)
+            elif opt in ('-r', '--repeat'):
+                if len(arg) > 0:
+                    repeat = int(arg)
+            elif opt.lower() in ('-h', '--help'):
+                usage()
+                sys.exit()
+            else:
+                print("Unknown option: ", opt)
+                usage()
+                sys.exit(2)
+        if len(remainder) < 1:
+            print("Please specify one file name containing NMEA data.")
+            usage()
+            sys.exit(1)
+        if len(remainder) == 0:
+            filaname = []
+        else:
+            filaname = remainder[0]
+        if (host is None) & (mode == 'TCP'):
+            host = get_ip()
+    except getopt.GetoptError as msg:
+        print(msg)
+        usage()
+        sys.exit(2)
+
+    # Main program
+    if mode.upper() == 'UDP':
+        rcode = udp(dest, ip_port, filaname, td, repeat, speed)
+    elif mode.upper() == 'TCP':
+        rcode = tcp(host, ip_port, filaname, td, repeat, speed)
+    else:
+        usage()
+    if rcode is True:
+        print("Exiting cleanly.")
+        sys.exit(0)
+    else:
+        print("Something went wrong, exiting.")
+        sys.exit(1)
+
+
+if __name__ == '__main__':
+    # execute only if run as a script
+    main()
