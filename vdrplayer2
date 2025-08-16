@@ -103,7 +103,7 @@ class MessageReader:
             if not row.keys() & {"received_at", "protocol"}:
                 print("Bad row: " + str(row), file=sys.stderr)
                 continue
-            if not self.message_type in row["protocol"].lower():
+            if self.message_type not in row["protocol"].lower():
                 continue
             try:
                 timestamp = float(row["received_at"]) / 1000
@@ -126,12 +126,12 @@ class MsgFormat:
         """Format given row from csv.DictReader in binary original form"""
 
         def format_0183(row):
-            if not "raw_data" in row.keys():
+            if "raw_data" not in row.keys():
                 return ""
             line = row["raw_data"]
             if line.endswith("<0D><0A>"):
                 line = line.replace("<0D><0A>", "\r\n")
-            # We don't care about spurious non-printable out of specs data for now
+            # We don't care about spurious non-printable out of specs data
             return line
 
         if self.msg_type == "0183":
@@ -172,7 +172,8 @@ class TcpServer:
             lines += 1
             self.connection.send(self.formatter.format(row))
             self.progress_printer.report(lines)
-        if not self.args.quiet: print("")
+        if not self.args.quiet:
+            print("")
 
 
 class UdpClient:
