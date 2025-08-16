@@ -20,7 +20,7 @@ VDR mode.
 
 Use vdrplayer2 -h for help
 
-Kudos: Dan Dickey a k a Transmitterdan for the original VDRPlayer.py script
+Kudos: Dan Dickey a k a Transmitterdan for the original VDRplayer.py script
 at https://github.com/transmitterdan/VDRplayer.git which has been the
 inspiration for this.
 """
@@ -60,6 +60,30 @@ class LogFileReader:
         while line and (not line.strip() or line.strip().startswith("#")):
             line = self.text_io_wrapper.readline()
         return line.strip()
+
+
+class ProgressPrinter:
+    """Report processed lines on stdout."""
+
+    # pylint: disable=too-few-public-methods
+
+    def __init__(self, args, text_io_wrapper):
+        """Count number of lines in file and reset stream"""
+        self.timestamp = 0
+        self.lines = 0
+        self.quiet = args.quiet
+        while text_io_wrapper.readline():
+            self.lines += 1
+        text_io_wrapper.seek(0)
+
+    def report(self, lines):
+        """Print a written/total string if last is deemed too old."""
+        if self.quiet:
+            return
+        elapsed = time.time() - self.timestamp
+        if elapsed > 1:
+            print(f"Processed {lines}/{self.lines}\r", end="", flush=True)
+            self.timestamp = time.time()
 
 
 class MessageReader:
@@ -114,25 +138,31 @@ class MsgFormat:
             return line
 
         if self.msg_type == "0183":
-            return format_0183(row)
+            return format_0183(row).encode()
         raise NotImplementedError(self.msg_type)
 
 
 class TcpServer:
     """Run a server which after being connected sends a bunch of messages"""
 
-    def __init__(self, args):
+    def __init__(self, args, progress_printer):
+        self.formatter = MsgFormat(args.messages)
+        self.progress_printer = progress_printer
+        self.args = args
         self.socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         self.socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
         self.socket.bind((args.interface, args.port))
+        if not args.quiet:
+            print("Waiting for client to connect")
         self.socket.listen(1)
         self.connection, client = self.socket.accept()
-        self.formatter = MsgFormat(args.messages)
-        print(f"Connected to {client}")
+        if not args.quiet:
+            print(f"Connected to {client}")
 
     def close(self):
         """Close all sockets."""
-        print("closing connection")
+        if not self.args.quiet:
+            print("Closing connection")
         self.socket.shutdown(socket.SHUT_RDWR)
         self.socket.close()
         self.connection.shutdown(socket.SHUT_RDWR)
@@ -140,28 +170,35 @@ class TcpServer:
 
     def send_data(self, rows):
         """Send all rows in given argument to connected client"""
+        lines = 0
         for row in rows:
-            self.connection.send(self.formatter.format(row).encode())
+            lines += 1
+            self.connection.send(self.formatter.format(row))
+            self.progress_printer.report(lines)
+        print("")
 
 
 class UdpClient:
     """Run a udp client which sends a bunch of messages"""
 
-    def __init__(self, args):
+    def __init__(self, args, progress_printer):
         self.args = args
         self.formatter = MsgFormat(args.messages)
+        self.progress_printer = progress_printer
 
     def close(self):
-        """A void operation for UDP"""
+        """Void operation for UDP"""
 
     def send_data(self, rows):
         """Send all rows in given argument to (args.destination, args.port)"""
         s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        lines = 0
         for row in rows:
-            s.sendto(
-                (self.args.destination, self.args.port),
-                self.formatter.format(row).encode(),
-            )
+            dest = (self.args.destination, self.args.port)
+            s.sendto(dest, self.formatter.format(row))
+            lines += 1
+            self.progress_printer.report(lines)
+        print("")
 
 
 def get_args():
@@ -219,6 +256,13 @@ def get_args():
         help="Log file created by Data Monitor in VDR mode [monitor.csv]",
         default="monitor.csv",
     )
+    parser.add_argument(
+        "-q",
+        "--quiet",
+        default=False,
+        action="store_true",
+        help="Run in quiet mode [false]",
+    )
     args = parser.parse_args()
     return args
 
@@ -228,15 +272,20 @@ def main():
 
     args = get_args()
     log_file_reader = LogFileReader()
+    progress_printer = ProgressPrinter(args, args.logfile)
     log_file_reader.open(args.logfile)
     csv_reader = csv.DictReader(log_file_reader)
     message_reader = MessageReader(csv_reader, args.messages)
     if args.role == "tcp":
-        server = TcpServer(args)
+        server = TcpServer(args, progress_printer)
     else:
-        server = UdpClient(args)
+        server = UdpClient(args, progress_printer)
     for _ in range(args.count):
+        if not args.quiet:
+            print(f"Playing file {args.logfile.name}")
         server.send_data(message_reader)
+        args.logfile.seek(0)
+        message_reader.timestamp = -1
     server.close()
 
 
