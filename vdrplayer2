@@ -65,8 +65,6 @@ class LogFileReader:
 class ProgressPrinter:
     """Report processed lines on stdout."""
 
-    # pylint: disable=too-few-public-methods
-
     def __init__(self, args, text_io_wrapper):
         """Count number of lines in file and reset stream"""
         self.timestamp = 0
@@ -119,8 +117,6 @@ class MessageReader:
 
 class MsgFormat:
     """Format rows found in log file to their original, binary form"""
-
-    # pylint: disable=too-few-public-methods
 
     def __init__(self, msg_type):
         self.msg_type = msg_type
