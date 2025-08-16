@@ -210,68 +210,47 @@ class UdpClient:
 
 def get_args():
     """Return parsed arg_parser instance."""
+    # fmt: off
 
     parser = argparse.ArgumentParser(description="OpenCPN logfile replay tool")
     parser.add_argument(
-        "-r",
-        "--role",
-        choices=["tcp", "udp"],
-        default="tcp",
+        "-r", "--role", choices=["tcp", "udp"], default="tcp",
         help="Network role: tcp server or udp sender/client [tcp]",
     )
     parser.add_argument(
-        "-m",
-        "--messages",
-        choices=["0183", "2000", "signalk"],
+        "-m", "--messages", choices=["0183", "2000", "signalk"],
         default="0183",
         help="Type of NMEA or signalK messages to play [0183]",
     )
     parser.add_argument(
-        "-p",
-        "--port",
-        metavar="port",
-        default="2947",
-        type=int,
-        help="Local port [2947]",
+        "-p", "--port", metavar="port", default="2947", type=int,
+        help="Local port (tcp) or destination port (udp) [2947]",
     )
     parser.add_argument(
-        "-d",
-        "--destination",
-        metavar="destination",
-        default="localhost",
+        "-d", "--destination", metavar="destination", default="localhost",
         help="Udp destination hostname or ip address [localhost]",
     )
     parser.add_argument(
-        "-i",
-        "--interface",
-        metavar="interface",
-        default="localhost",
+        "-i", "--interface", metavar="interface", default="localhost",
         help="TCP server interface hostname or IP address [localhost]",
     )
     parser.add_argument(
-        "-c",
-        "--count",
-        metavar="count",
-        type=int,
-        default=1,
+        "-c", "--count", metavar="count", type=int, default=1,
         help="Number of times to play input file [1]",
     )
     parser.add_argument(
-        "-q",
-        "--quiet",
-        default=False,
-        action="store_true",
+        "-q", "--quiet", default=False, action="store_true",
         help="Run in quiet mode [false]",
     )
     parser.add_argument(
-        "logfile",
-        nargs="?",
-        type=argparse.FileType("r"),
+        "logfile", nargs="?", type=argparse.FileType("r"),
         default="monitor.csv",
         help="Log file created by Data Monitor in VDR mode [monitor.csv]",
     )
     args = parser.parse_args()
     return args
+
+    # fmt: on
 
 
 def main():
