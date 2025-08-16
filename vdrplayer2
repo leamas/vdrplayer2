@@ -103,12 +103,13 @@ class MessageReader:
             if not row.keys() & {"received_at", "protocol"}:
                 print("Bad row: " + str(row), file=sys.stderr)
                 continue
-            if self.message_type in row["protocol"].lower():
-                try:
-                    timestamp = int(row["received_at"]) / 1000
-                except ValueError:
-                    print("Bad timestamp: " + row["received_at"], file=sys.stderr)
-                    continue
+            if not self.message_type in row["protocol"].lower():
+                continue
+            try:
+                timestamp = int(row["received_at"]) / 1000
+            except ValueError:
+                print("Bad timestamp: " + row["received_at"], file=sys.stderr)
+            else:
                 if self.timestamp != -1:
                     time.sleep(timestamp - self.timestamp)
                 self.timestamp = timestamp
@@ -171,7 +172,7 @@ class TcpServer:
             lines += 1
             self.connection.send(self.formatter.format(row))
             self.progress_printer.report(lines)
-        print("")
+        if not self.args.quiet: print("")
 
 
 class UdpClient:
