@@ -106,7 +106,7 @@ class MessageReader:
             if not self.message_type in row["protocol"].lower():
                 continue
             try:
-                timestamp = int(row["received_at"]) / 1000
+                timestamp = float(row["received_at"]) / 1000
             except ValueError:
                 print("Bad timestamp: " + row["received_at"], file=sys.stderr)
             else:
