@@ -15,13 +15,13 @@
 # along with this program.  If not, see <http://www.gnu.org/licenses/>.
 
 """
-Tool to replay log files created by the OpenCPN Data Monitor in 
+Tool to replay log files created by the OpenCPN Data Monitor in
 VDR mode.
 
 Use vdrplayer2 -h for help
 
 Kudos: Dan Dickey a k a Transmitterdan for the original VDRPlayer.py script
-at https://github.com/transmitterdan/VDRplayer.git which has been the 
+at https://github.com/transmitterdan/VDRplayer.git which has been the
 inspiration for this.
 """
 
@@ -33,9 +33,10 @@ import time
 
 assert sys.version_info >= (3, 10), "Must run in Python version 3.10 or above"
 
+
 class LogFileReader:
-    """ Iterable file object, removes comments and empty lines from source given
-        to open(). """
+    """Iterable file object, removes comments and empty lines from source given
+    to open()."""
 
     def __iter__(self):
         return self
@@ -48,23 +49,23 @@ class LogFileReader:
 
     def open(self, text_io_wrapper):
         """Start reading from given iterable argument, typically returned by
-            open()"""
+        open()"""
         # pylint: disable=attribute-defined-outside-init
 
         self.text_io_wrapper = text_io_wrapper
 
     def read(self):
-        """ Standard file object operation"""
+        """Standard file object operation"""
         line = self.text_io_wrapper.readline()
-        while (line and (not line.strip() or line.strip().startswith('#'))):
+        while line and (not line.strip() or line.strip().startswith("#")):
             line = self.text_io_wrapper.readline()
         return line.strip()
 
 
 class MessageReader:
     """Iterable object, remove all rows created by csv.DictReader which
-       does not match message type given to constructor. Add delays
-       corresponding to timestamps"""
+    does not match message type given to constructor. Add delays
+    corresponding to timestamps"""
 
     def __init__(self, source, message_type):
         self.message_type = message_type
@@ -77,24 +78,25 @@ class MessageReader:
     def __next__(self):
         while True:
             row = self.source.__next__()
-            if not row.keys() & {'received_at', 'protocol'}:
+            if not row.keys() & {"received_at", "protocol"}:
                 print("Bad row: " + str(row), file=sys.stderr)
                 continue
-            if self.message_type in row['protocol'].lower():
+            if self.message_type in row["protocol"].lower():
                 try:
-                    timestamp = int(row['received_at'])/1000
+                    timestamp = int(row["received_at"]) / 1000
                 except ValueError:
-                    print("Bad timestamp: " + row['received_at'],
-                          file=sys.stderr)
+                    print("Bad timestamp: " + row["received_at"], file=sys.stderr)
                     continue
                 if self.timestamp != -1:
                     time.sleep(timestamp - self.timestamp)
                 self.timestamp = timestamp
                 return row
 
+
 class MsgFormat:
     """Format rows found in log file to their original, binary form"""
-     # pylint: disable=too-few-public-methods
+
+    # pylint: disable=too-few-public-methods
 
     def __init__(self, msg_type):
         self.msg_type = msg_type
@@ -103,20 +105,21 @@ class MsgFormat:
         """Format given row from csv.DictReader in binary original form"""
 
         def format_0183(row):
-            if not 'raw_data' in row.keys():
-                return ''
-            line = row['raw_data']
-            if line.endswith('<0D><0A>'):
-                line = line.replace('<0D><0A>', '\r\n')
+            if not "raw_data" in row.keys():
+                return ""
+            line = row["raw_data"]
+            if line.endswith("<0D><0A>"):
+                line = line.replace("<0D><0A>", "\r\n")
             # We don't care about spurious non-printable out of specs data for now
             return line
 
-        if self.msg_type == '0183':
-            return  format_0183(row)
+        if self.msg_type == "0183":
+            return format_0183(row)
         raise NotImplementedError(self.msg_type)
 
+
 class TcpServer:
-    """Run a server which after being connected sends a bunch of messages """
+    """Run a server which after being connected sends a bunch of messages"""
 
     def __init__(self, args):
         self.socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
@@ -128,7 +131,7 @@ class TcpServer:
         print(f"Connected to {client}")
 
     def close(self):
-        """ Close all sockets. """
+        """Close all sockets."""
         print("closing connection")
         self.socket.shutdown(socket.SHUT_RDWR)
         self.socket.close()
@@ -136,56 +139,86 @@ class TcpServer:
         self.connection.close()
 
     def send_data(self, rows):
-        """ Send all rows in given argument to connected client"""
+        """Send all rows in given argument to connected client"""
         for row in rows:
             self.connection.send(self.formatter.format(row).encode())
 
+
 class UdpClient:
-    """Run a udp client which sends a bunch of messages """
+    """Run a udp client which sends a bunch of messages"""
 
     def __init__(self, args):
         self.args = args
         self.formatter = MsgFormat(args.messages)
 
     def close(self):
-        """ A void operation for UDP"""
+        """A void operation for UDP"""
 
     def send_data(self, rows):
-        """ Send all rows in given argument to (args.destination, args.port)"""
+        """Send all rows in given argument to (args.destination, args.port)"""
         s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         for row in rows:
-            s.sendto((self.args.destination, self.args.port),
-                     self.formatter.format(row).encode())
+            s.sendto(
+                (self.args.destination, self.args.port),
+                self.formatter.format(row).encode(),
+            )
 
 
 def get_args():
     """Return parsed arg_parser instance."""
 
-    parser = argparse.ArgumentParser(
-            description="OpenCPN logfile replay tool")
+    parser = argparse.ArgumentParser(description="OpenCPN logfile replay tool")
     parser.add_argument(
-            '-r', '--role', choices=['tcp', 'udp'], default='tcp',
-            help='Network role: tcp server or udp sender/client [tcp]')
+        "-r",
+        "--role",
+        choices=["tcp", "udp"],
+        default="tcp",
+        help="Network role: tcp server or udp sender/client [tcp]",
+    )
     parser.add_argument(
-            '-m', '--messages', choices=['0183', '2000', 'signalk'],
-            default='0183',
-            help='Type of NMEA or signalK messages to play [0183]')
+        "-m",
+        "--messages",
+        choices=["0183", "2000", "signalk"],
+        default="0183",
+        help="Type of NMEA or signalK messages to play [0183]",
+    )
     parser.add_argument(
-            '-p', '--port', metavar='port', default='2947', type=int,
-            help='Local port [2947]')
+        "-p",
+        "--port",
+        metavar="port",
+        default="2947",
+        type=int,
+        help="Local port [2947]",
+    )
     parser.add_argument(
-            '-d', '--destination', metavar='destination', default='localhost',
-            help='Udp destination hostname or ip address [localhost]')
+        "-d",
+        "--destination",
+        metavar="destination",
+        default="localhost",
+        help="Udp destination hostname or ip address [localhost]",
+    )
     parser.add_argument(
-            '-i','--interface', metavar='interface', default='localhost',
-            help='TCP server interface hostname or IP address [localhost]')
+        "-i",
+        "--interface",
+        metavar="interface",
+        default="localhost",
+        help="TCP server interface hostname or IP address [localhost]",
+    )
     parser.add_argument(
-            '-c', '--count', metavar='count', type=int, default=1,
-            help='Number of times to play input file [1]')
+        "-c",
+        "--count",
+        metavar="count",
+        type=int,
+        default=1,
+        help="Number of times to play input file [1]",
+    )
     parser.add_argument(
-            'logfile', nargs='?', type=argparse.FileType('r'),
-            help='Log file created by Data Monitor in VDR mode [monitor.csv]',
-            default='monitor.csv')
+        "logfile",
+        nargs="?",
+        type=argparse.FileType("r"),
+        help="Log file created by Data Monitor in VDR mode [monitor.csv]",
+        default="monitor.csv",
+    )
     args = parser.parse_args()
     return args
 
@@ -198,7 +231,7 @@ def main():
     log_file_reader.open(args.logfile)
     csv_reader = csv.DictReader(log_file_reader)
     message_reader = MessageReader(csv_reader, args.messages)
-    if args.role == 'tcp':
+    if args.role == "tcp":
         server = TcpServer(args)
     else:
         server = UdpClient(args)
@@ -206,5 +239,6 @@ def main():
         server.send_data(message_reader)
     server.close()
 
-if __name__ == '__main__':
+
+if __name__ == "__main__":
     main()
