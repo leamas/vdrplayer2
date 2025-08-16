@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 
-#  Copyright 2025 Alec Leamas
+#  Copyright (C) 2025 Alec Leamas
 #
 # This program is free software: you can redistribute it and/or modify
 # it under the terms of the GNU General Public License as published by
@@ -34,6 +34,25 @@ import time
 assert sys.version_info >= (3, 10), "Must run in Python version 3.10 or above"
 
 
+class ProgressPrinter:
+    """Report processed lines on stdout."""
+
+    def __init__(self, args, total):
+        """Count number of lines in file and reset stream"""
+        self.timestamp = 0
+        self.total = total
+        self.quiet = args.quiet
+
+    def report(self, lines, force=False):
+        """Print a written/total string if last is deemed too old."""
+        if self.quiet:
+            return
+        elapsed = time.time() - self.timestamp
+        if force or elapsed > 1:
+            print(f"Processed {lines}/{self.total}\r", end="", flush=True)
+            self.timestamp = time.time()
+
+
 class LogFileReader:
     """Iterable file object, removes comments and empty lines from source given
     to open()."""
@@ -61,27 +80,14 @@ class LogFileReader:
             line = self.text_io_wrapper.readline()
         return line.strip()
 
+    def count_lines(self):
+        """Return number of data (not comments etc) lines"""
 
-class ProgressPrinter:
-    """Report processed lines on stdout."""
-
-    def __init__(self, args, text_io_wrapper):
-        """Count number of lines in file and reset stream"""
-        self.timestamp = 0
-        self.lines = 0
-        self.quiet = args.quiet
-        while text_io_wrapper.readline():
-            self.lines += 1
-        text_io_wrapper.seek(0)
-
-    def report(self, lines):
-        """Print a written/total string if last is deemed too old."""
-        if self.quiet:
-            return
-        elapsed = time.time() - self.timestamp
-        if elapsed > 1:
-            print(f"Processed {lines}/{self.lines}\r", end="", flush=True)
-            self.timestamp = time.time()
+        lines = 0
+        for _ in self:
+            lines += 1
+        self.text_io_wrapper.seek(0)
+        return lines - 1
 
 
 class MessageReader:
@@ -173,6 +179,7 @@ class TcpServer:
             self.connection.send(self.formatter.format(row))
             self.progress_printer.report(lines)
         if not self.args.quiet:
+            self.progress_printer.report(lines, True)
             print("")
 
 
@@ -196,7 +203,9 @@ class UdpClient:
             s.sendto(dest, self.formatter.format(row))
             lines += 1
             self.progress_printer.report(lines)
-        print("")
+        if not self.args.quiet:
+            self.progress_printer.report(lines, True)
+            print("")
 
 
 def get_args():
@@ -248,18 +257,18 @@ def get_args():
         help="Number of times to play input file [1]",
     )
     parser.add_argument(
-        "logfile",
-        nargs="?",
-        type=argparse.FileType("r"),
-        help="Log file created by Data Monitor in VDR mode [monitor.csv]",
-        default="monitor.csv",
-    )
-    parser.add_argument(
         "-q",
         "--quiet",
         default=False,
         action="store_true",
         help="Run in quiet mode [false]",
+    )
+    parser.add_argument(
+        "logfile",
+        nargs="?",
+        type=argparse.FileType("r"),
+        default="monitor.csv",
+        help="Log file created by Data Monitor in VDR mode [monitor.csv]",
     )
     args = parser.parse_args()
     return args
@@ -270,17 +279,17 @@ def main():
 
     args = get_args()
     log_file_reader = LogFileReader()
-    progress_printer = ProgressPrinter(args, args.logfile)
     log_file_reader.open(args.logfile)
+    progress_printer = ProgressPrinter(args, log_file_reader.count_lines())
     csv_reader = csv.DictReader(log_file_reader)
     message_reader = MessageReader(csv_reader, args.messages)
     if args.role == "tcp":
         server = TcpServer(args, progress_printer)
     else:
         server = UdpClient(args, progress_printer)
-    for _ in range(args.count):
+    for i in range(args.count):
         if not args.quiet:
-            print(f"Playing file {args.logfile.name}")
+            print(f"Playing file {args.logfile.name} {i + 1}/{args.count}")
         server.send_data(message_reader)
         args.logfile.seek(0)
         message_reader.timestamp = -1
