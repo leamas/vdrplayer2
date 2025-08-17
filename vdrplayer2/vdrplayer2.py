@@ -117,7 +117,9 @@ class MessageReader:
                 print("Bad timestamp: " + row["received_at"], file=sys.stderr)
             else:
                 if self.timestamp != -1:
-                    time.sleep(timestamp - self.timestamp)
+                    delay = timestamp - self.timestamp
+                    delay = max(0.1, delay)
+                    time.sleep(delay)
                 self.timestamp = timestamp
                 return row
 
@@ -176,6 +178,8 @@ class TcpServer:
         lines = 0
         for row in rows:
             lines += 1
+            print("Sending: " , end="")
+            print(self.formatter.format(row))
             self.connection.send(self.formatter.format(row))
             self.progress_printer.report(lines)
         if not self.args.quiet:
