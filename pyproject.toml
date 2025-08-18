@@ -4,6 +4,9 @@ version = "0.0.1"
 authors = [
   { name="Alec Leamas", email="leamas@nowhere.net" },
 ]
+license = "GPL-3.0-or-later"
+license-files = ["COPYING"]
+
 description = "OpenCPN logfile replay tool"
 readme = "README.md"
 requires-python = ">=3.10"
@@ -11,8 +14,7 @@ classifiers = [
     "Programming Language :: Python :: 3",
     "Operating System :: OS Independent",
 ]
-license = "GPL-3.0-or-later"
-license-files = ["COPYING"]
+dependencies = ["websocket-client"]
 
 [project.urls]
 Homepage = "https://github.com/leamas/vdrplayer2"

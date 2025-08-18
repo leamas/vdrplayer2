@@ -26,10 +26,14 @@ inspiration for this.
 """
 
 import argparse
+import asyncio
 import csv
 import socket
 import sys
 import time
+import websockets
+
+from websockets.sync.server import serve
 
 assert sys.version_info >= (3, 10), "Must run in Python version 3.10 or above"
 
@@ -118,7 +122,6 @@ class MessageReader:
             else:
                 if self.timestamp != -1:
                     delay = timestamp - self.timestamp
-                    delay = max(0.1, delay)
                     time.sleep(delay)
                 self.timestamp = timestamp
                 return row
@@ -142,29 +145,43 @@ class MsgFormat:
             # We don't care about spurious non-printable out of specs data
             return line
 
+        def format_signalk(row):
+            line = row["raw_data"] if "raw_data" in row.keys() else ""
+            return line + "\r\n"
+
         if self.msg_type == "0183":
             return format_0183(row).encode()
+        if self.msg_type == "signalk":
+            return format_signalk(row).encode()
         raise NotImplementedError(self.msg_type)
 
 
 class TcpServer:
     """Run a server which after being connected sends a bunch of messages"""
 
-    def __init__(self, args, progress_printer):
-        self.formatter = MsgFormat(args.messages)
-        self.progress_printer = progress_printer
+    def __init__(self, args, rows, progress_printer):
         self.args = args
+        self.rows = rows
+        self.progress_printer = progress_printer
+        self.formatter = MsgFormat(args.messages)
         self.socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         self.socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
         self.socket.bind((args.interface, args.port))
         if not args.quiet:
-            print("Waiting for client to connect")
+            print(f"Awaiting client connection at {args.interface}:{args.port}")
         self.socket.listen(1)
         self.connection, client = self.socket.accept()
         if not args.quiet:
             print(f"Connected to {client}")
+        for i in range(args.count):
+            if not args.quiet:
+                print(f"Playing file {args.logfile.name} {i + 1}/{args.count}")
+            self._send_rows()
+            args.logfile.seek(0)
+            self.rows.timestamp = -1
+        self._close()
 
-    def close(self):
+    def _close(self):
         """Close all sockets."""
         if not self.args.quiet:
             print("Closing connection")
@@ -173,14 +190,13 @@ class TcpServer:
         self.connection.shutdown(socket.SHUT_RDWR)
         self.connection.close()
 
-    def send_data(self, rows):
+    def _send_rows(self):
         """Send all rows in given argument to connected client"""
         lines = 0
-        for row in rows:
+        for row in self.rows:
             lines += 1
-            print("Sending: " , end="")
-            print(self.formatter.format(row))
-            self.connection.send(self.formatter.format(row))
+            print(self.formatter.format(row).decode())
+            self.connection.send(self.formatter.format(row).decode())
             self.progress_printer.report(lines)
         if not self.args.quiet:
             self.progress_printer.report(lines, True)
@@ -190,19 +206,23 @@ class TcpServer:
 class UdpClient:
     """Run a udp client which sends a bunch of messages"""
 
-    def __init__(self, args, progress_printer):
+    def __init__(self, args, rows, progress_printer):
         self.args = args
-        self.formatter = MsgFormat(args.messages)
+        self.rows = rows
         self.progress_printer = progress_printer
+        self.formatter = MsgFormat(args.messages)
+        for i in range(args.count):
+            if not args.quiet:
+                print(f"Playing file {args.logfile.name} {i + 1}/{args.count}")
+            self._send_rows()
+            args.logfile.seek(0)
+            self.rows.timestamp = -1
 
-    def close(self):
-        """Void operation for UDP"""
-
-    def send_data(self, rows):
+    def _send_rows(self):
         """Send all rows in given argument to (args.destination, args.port)"""
         s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         lines = 0
-        for row in rows:
+        for row in self.rows:
             dest = (self.args.destination, self.args.port)
             s.sendto(dest, self.formatter.format(row))
             lines += 1
@@ -212,19 +232,66 @@ class UdpClient:
             print("")
 
 
+class SignalkServer:
+
+    def __init__(self, args, rows, progress_printer):
+        self.args = args
+        self.rows = rows
+        self.progress_printer = progress_printer
+        self.formatter = MsgFormat(args.messages)
+
+    async def handle_client(self, websocket):
+        for i in range(self.args.count):
+            if not self.args.quiet:
+                print(
+                    f"Playing file {self.args.logfile.name} {i + 1}/{self.args.count}"
+                )
+            await self._send_rows(websocket)
+            self.args.logfile.seek(0)
+            self.rows.timestamp = -1
+        await websocket.close()
+        asyncio.get_event_loop().stop()
+
+    async def _send_rows(self, websocket):
+        """Send all rows in given argument to connected client"""
+        lines = 0
+        for row in self.rows:
+            await websocket.send(self.formatter.format(row))
+            lines += 1
+            time.sleep(0.2)  ## FIXME
+            self.progress_printer.report(lines)
+        if not self.args.quiet:
+            self.progress_printer.report(lines, True)
+            print("")
+
+    @staticmethod
+    async def _do_run(args, rows, progress_printer):
+        sk_server = SignalkServer(args, rows, progress_printer)
+        handle_client = lambda websocket: sk_server.handle_client(websocket)
+        ws_server = await websockets.serve(handle_client, args.interface, args.port)
+        await ws_server.wait_closed()
+
+    @staticmethod
+    def run(args, rows, progress_printer):
+        try:
+            asyncio.run(SignalkServer._do_run(args, rows, progress_printer))
+        except RuntimeError:
+            pass
+
+
 def get_args():
     """Return parsed arg_parser instance."""
     # fmt: off
 
     parser = argparse.ArgumentParser(description="OpenCPN logfile replay tool")
     parser.add_argument(
-        "-r", "--role", choices=["tcp", "udp"], default="tcp",
-        help="Network role: tcp server or udp sender/client [tcp]",
+        "-r", "--role", choices=["tcp", "udp", "signalk"], default="tcp",
+        help="Network role: tcp server,  udp client or signalK source [tcp]"
     )
     parser.add_argument(
-        "-m", "--messages", choices=["0183", "2000", "signalk"],
+        "-m", "--messages", choices=["0183", "2000"],
         default="0183",
-        help="Type of NMEA or signalK messages to play [0183]",
+        help="Type of NMEA messages to play for tcp/udp roles [0183]",
     )
     parser.add_argument(
         "-p", "--port", metavar="port", default="2947", type=int,
@@ -252,6 +319,8 @@ def get_args():
         help="Log file created by Data Monitor in VDR mode [monitor.csv]",
     )
     args = parser.parse_args()
+    if args.role == "signalk":
+        args.messages = "signalk"
     return args
 
     # fmt: on
@@ -267,16 +336,11 @@ def main():
     csv_reader = csv.DictReader(log_file_reader)
     message_reader = MessageReader(csv_reader, args.messages)
     if args.role == "tcp":
-        server = TcpServer(args, progress_printer)
+        TcpServer(args, message_reader, progress_printer)
+    elif args.role == "udp":
+        UdpClient(args, message_reader, progress_printer)
     else:
-        server = UdpClient(args, progress_printer)
-    for i in range(args.count):
-        if not args.quiet:
-            print(f"Playing file {args.logfile.name} {i + 1}/{args.count}")
-        server.send_data(message_reader)
-        args.logfile.seek(0)
-        message_reader.timestamp = -1
-    server.close()
+        SignalkServer.run(args, message_reader, progress_printer)
 
 
 if __name__ == "__main__":
