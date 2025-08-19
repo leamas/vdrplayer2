@@ -33,7 +33,7 @@ import sys
 import time
 import websockets
 
-from websockets.sync.server import serve
+from websockets.asyncio.server import serve
 
 assert sys.version_info >= (3, 10), "Must run in Python version 3.10 or above"
 
@@ -258,25 +258,37 @@ class SignalkServer:
         for row in self.rows:
             await websocket.send(self.formatter.format(row))
             lines += 1
-            time.sleep(0.2)  ## FIXME
+            await asyncio.sleep(0.2)  ## FIXME
             self.progress_printer.report(lines)
         if not self.args.quiet:
             self.progress_printer.report(lines, True)
             print("")
 
     @staticmethod
-    async def _do_run(args, rows, progress_printer):
-        sk_server = SignalkServer(args, rows, progress_printer)
-        handle_client = lambda websocket: sk_server.handle_client(websocket)
-        ws_server = await websockets.serve(handle_client, args.interface, args.port)
-        await ws_server.wait_closed()
-
-    @staticmethod
     def run(args, rows, progress_printer):
-        try:
-            asyncio.run(SignalkServer._do_run(args, rows, progress_printer))
-        except RuntimeError:
-            pass
+
+        async def do_run(args, rows, progress_printer):
+            sk_server = SignalkServer(args, rows, progress_printer)
+            handle_client = lambda websocket: sk_server.handle_client(websocket)
+            while True:
+                try:
+                    async with serve(
+                        handle_client, args.interface, args.port
+                    ) as ws_server:
+                        await ws_server.serve_forever()
+                except EOFError:
+                    print("EOFError in serve")
+            await ws_server.wait_closed()
+
+        while True:
+            try:
+                asyncio.run(do_run(args, rows, progress_printer))
+            except RuntimeError:
+                print("RuntimeError")
+                continue
+            except EOFError:
+                print("EOFError in asyncio.run")
+                continue
 
 
 def get_args():
@@ -286,7 +298,7 @@ def get_args():
     parser = argparse.ArgumentParser(description="OpenCPN logfile replay tool")
     parser.add_argument(
         "-r", "--role", choices=["tcp", "udp", "signalk"], default="tcp",
-        help="Network role: tcp server,  udp client or signalK source [tcp]"
+        help="Network role: tcp server, udp client or signalK source [tcp]"
     )
     parser.add_argument(
         "-m", "--messages", choices=["0183", "2000"],
