@@ -36,6 +36,17 @@ from websockets.sync.server import serve
 
 assert sys.version_info >= (3, 10), "Must run in Python version 3.10 or above"
 
+help_epilog = """Usage notes:
+Using -r tcp -m 0183 is somewhat tested and might work.
+
+Using -r signalk works, but is brittle. First disable the opencpn signalk
+connection, then start vdrplayer and finally enable the opencpn connection
+Use Data monitor to verify that the data is ok.
+
+Using -m 2000 is not implemented, will not work. The UDP code for -r udp is
+there but untested.
+"""
+
 
 class ProgressPrinter:
     """Report processed lines on stdout."""
@@ -146,8 +157,7 @@ class MsgFormat:
             return line
 
         def format_signalk(row):
-            line = row["raw_data"] if "raw_data" in row.keys() else ""
-            return line 
+            return row["raw_data"] if "raw_data" in row.keys() else ""
 
         if self.msg_type == "0183":
             return format_0183(row).encode()
@@ -284,10 +294,13 @@ def get_args():
     """Return parsed arg_parser instance."""
     # fmt: off
 
-    parser = argparse.ArgumentParser(description="OpenCPN logfile replay tool")
+    parser = argparse.ArgumentParser(
+                        description="OpenCPN logfile replay tool",
+                        epilog=help_epilog,
+                        formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument(
         "-r", "--role", choices=["tcp", "udp", "signalk"], default="tcp",
-        help="Network role: tcp server, udp client or signalK source [tcp]"
+        help="Network role: tcp server, udp client or signalK source [tcp]",
     )
     parser.add_argument(
         "-m", "--messages", choices=["0183", "2000"],
