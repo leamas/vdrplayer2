@@ -26,14 +26,13 @@ inspiration for this.
 """
 
 import argparse
-import asyncio
 import csv
 import socket
 import sys
+import threading
 import time
-import websockets
 
-from websockets.asyncio.server import serve
+from websockets.sync.server import serve
 
 assert sys.version_info >= (3, 10), "Must run in Python version 3.10 or above"
 
@@ -53,7 +52,7 @@ class ProgressPrinter:
             return
         elapsed = time.time() - self.timestamp
         if force or elapsed > 1:
-            print(f"Processed {lines}/{self.total}\r", end="", flush=True)
+            print(f"Sent {lines}/{self.total}\r", end="", flush=True)
             self.timestamp = time.time()
 
 
@@ -88,21 +87,23 @@ class LogFileReader:
         """Return number of data (not comments etc) lines"""
 
         lines = 0
-        for _ in self:
-            lines += 1
+        for line in self:
+            if len(line) > 3:
+                # Hack handling signalk having the final '"' on a separate line
+                lines += 1
         self.text_io_wrapper.seek(0)
-        return lines - 1
+        return lines - 1  # Don't include first line, the column specification
 
 
 class MessageReader:
     """Iterable object, remove all rows created by csv.DictReader which
-    does not match message type given to constructor. Add delays
-    corresponding to timestamps"""
+    does not match message type given to constructor. Add delays as defined
+    by timestamps."""
 
     def __init__(self, source, message_type):
         self.message_type = message_type
         self.source = source
-        self.timestamp = -1
+        self.timestamp = None
 
     def __iter__(self):
         return self
@@ -119,12 +120,11 @@ class MessageReader:
                 timestamp = float(row["received_at"]) / 1000
             except ValueError:
                 print("Bad timestamp: " + row["received_at"], file=sys.stderr)
-            else:
-                if self.timestamp != -1:
-                    delay = timestamp - self.timestamp
-                    time.sleep(delay)
-                self.timestamp = timestamp
                 return row
+            if self.timestamp:
+                time.sleep(timestamp - self.timestamp)
+            self.timestamp = timestamp
+            return row
 
 
 class MsgFormat:
@@ -147,7 +147,7 @@ class MsgFormat:
 
         def format_signalk(row):
             line = row["raw_data"] if "raw_data" in row.keys() else ""
-            return line + "\r\n"
+            return line 
 
         if self.msg_type == "0183":
             return format_0183(row).encode()
@@ -168,7 +168,8 @@ class TcpServer:
         self.socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
         self.socket.bind((args.interface, args.port))
         if not args.quiet:
-            print(f"Awaiting client connection at {args.interface}:{args.port}")
+            server_address = f"{args.interface}:{args.port}"
+            print(f"Awaiting client connection at {server_address}")
         self.socket.listen(1)
         self.connection, client = self.socket.accept()
         if not args.quiet:
@@ -178,7 +179,7 @@ class TcpServer:
                 print(f"Playing file {args.logfile.name} {i + 1}/{args.count}")
             self._send_rows()
             args.logfile.seek(0)
-            self.rows.timestamp = -1
+            self.rows.timestamp = None
         self._close()
 
     def _close(self):
@@ -194,9 +195,8 @@ class TcpServer:
         """Send all rows in given argument to connected client"""
         lines = 0
         for row in self.rows:
+            self.connection.send(self.formatter.format(row))
             lines += 1
-            print(self.formatter.format(row).decode())
-            self.connection.send(self.formatter.format(row).decode())
             self.progress_printer.report(lines)
         if not self.args.quiet:
             self.progress_printer.report(lines, True)
@@ -216,7 +216,7 @@ class UdpClient:
                 print(f"Playing file {args.logfile.name} {i + 1}/{args.count}")
             self._send_rows()
             args.logfile.seek(0)
-            self.rows.timestamp = -1
+            self.rows.timestamp = None
 
     def _send_rows(self):
         """Send all rows in given argument to (args.destination, args.port)"""
@@ -233,32 +233,34 @@ class UdpClient:
 
 
 class SignalkServer:
+    """SignalK websocket server which sends a bunch of messages"""
 
     def __init__(self, args, rows, progress_printer):
         self.args = args
         self.rows = rows
         self.progress_printer = progress_printer
         self.formatter = MsgFormat(args.messages)
+        self.all_played_evt = threading.Event()
 
-    async def handle_client(self, websocket):
+    def handle_client(self, websocket):
+        """Handle client connection object"""
         for i in range(self.args.count):
             if not self.args.quiet:
-                print(
-                    f"Playing file {self.args.logfile.name} {i + 1}/{self.args.count}"
-                )
-            await self._send_rows(websocket)
+                logfile = self.args.logfile.name
+                print(f"Playing file {logfile} {i + 1}/{self.args.count}")
+            self._send_rows(websocket)
             self.args.logfile.seek(0)
-            self.rows.timestamp = -1
-        await websocket.close()
-        asyncio.get_event_loop().stop()
+            self.rows.timestamp = None
+        print("All played")
+        websocket.close()
+        self.all_played_evt.set()
 
-    async def _send_rows(self, websocket):
-        """Send all rows in given argument to connected client"""
+    def _send_rows(self, websocket):
+        """Send all rows in self.rows to connected client"""
         lines = 0
         for row in self.rows:
-            await websocket.send(self.formatter.format(row))
+            websocket.send(self.formatter.format(row))
             lines += 1
-            await asyncio.sleep(0.2)  ## FIXME
             self.progress_printer.report(lines)
         if not self.args.quiet:
             self.progress_printer.report(lines, True)
@@ -266,29 +268,16 @@ class SignalkServer:
 
     @staticmethod
     def run(args, rows, progress_printer):
+        """Actually run the websocket server, terminates after having sent
+        all"""
 
-        async def do_run(args, rows, progress_printer):
-            sk_server = SignalkServer(args, rows, progress_printer)
-            handle_client = lambda websocket: sk_server.handle_client(websocket)
-            while True:
-                try:
-                    async with serve(
-                        handle_client, args.interface, args.port
-                    ) as ws_server:
-                        await ws_server.serve_forever()
-                except EOFError:
-                    print("EOFError in serve")
-            await ws_server.wait_closed()
-
-        while True:
-            try:
-                asyncio.run(do_run(args, rows, progress_printer))
-            except RuntimeError:
-                print("RuntimeError")
-                continue
-            except EOFError:
-                print("EOFError in asyncio.run")
-                continue
+        sk_server = SignalkServer(args, rows, progress_printer)
+        ws_server = serve(sk_server.handle_client, args.interface, args.port)
+        t = threading.Thread(target=ws_server.serve_forever)
+        t.start()
+        sk_server.all_played_evt.wait()
+        ws_server.shutdown()
+        t.join()
 
 
 def get_args():

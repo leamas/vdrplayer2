@@ -29,3 +29,7 @@ build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]
 packages = ["vdrplayer2"]
+
+[tool.black]
+line-length = 80
+include = "vdrplayer2"
