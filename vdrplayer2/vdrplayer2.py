@@ -26,17 +26,21 @@ inspiration for this.
 """
 
 import argparse
+import binascii
 import csv
 import socket
 import sys
 import threading
 import time
 
+from datetime import datetime
+from datetime import timezone
+
 from websockets.sync.server import serve
 
 assert sys.version_info >= (3, 10), "Must run in Python version 3.10 or above"
 
-help_epilog = """Usage notes:
+HELP_EPILOG  = """Usage notes:
 Using -r tcp -m 0183 is somewhat tested and might work.
 
 Using -r signalk works, but is brittle. First disable the opencpn signalk
@@ -95,7 +99,7 @@ class LogFileReader:
         return line.strip()
 
     def count_lines(self):
-        """Return number of data (not comments etc) lines"""
+        """Return number of data (not comments etc.) lines"""
 
         lines = 0
         for line in self:
@@ -159,10 +163,48 @@ class MsgFormat:
         def format_signalk(row):
             return row["raw_data"] if "raw_data" in row.keys() else ""
 
+        def format_2000(row):
+            """Convert a line in the log to the Actisense ASCII formatA as of
+            https://actisense.com/knowledge-base/nmea-2000/w2k-1-nmea-2000-to-wifi-gateway/nmea-2000-ascii-output-format/
+            """
+
+            if not row.keys() & {"received_at", "raw_data"}:
+                return ""
+            data = row["raw_data"]
+            bytes_ = binascii.unhexlify(data.strip().replace(" ", ""))
+            ps = bytes_[3]
+            pf = bytes_[4]
+            rdp = bytes_[5] & 0b011
+            prio = bytes_[5] & 0b011100 >> 2
+            if pf < 240:
+                pgn = (rdp << 16) + (pf << 8) + 0
+            else:
+                pgn = (rdp << 16) + (pf << 8) + ps
+            ms = row["received_at"]
+            try:
+                when = float(ms) / 1000
+            except ValueError as exc:
+                raise ValueError(f"Bad timestamp in line: {row}") from exc
+            try:
+                hms = datetime.fromtimestamp(when, timezone.utc)
+            except OSError as exc:
+                raise ValueError(f"Cannot convert timestamp {when}") from exc
+            payload_size = int(row["raw_data"].split()[12], 16)
+            payload: str = ""
+            for w in row["raw_data"].split()[13 : 13 + payload_size]:
+                payload += w
+            rv = f"{hms.hour:02d}{hms.minute:02d}{hms.second:02d}"
+            rv += f".{int(hms.microsecond / 1000):03d}"
+            rv += f" {ps:02X}{pf:02X}{prio:1X} {pgn:X} " + payload + "\r\n"
+            return rv
+
         if self.msg_type == "0183":
             return format_0183(row).encode()
         if self.msg_type == "signalk":
             return format_signalk(row).encode()
+        if self.msg_type == "2000":
+            return format_2000(row).encode()
+
         raise NotImplementedError(self.msg_type)
 
 
@@ -269,7 +311,11 @@ class SignalkServer:
         """Send all rows in self.rows to connected client"""
         lines = 0
         for row in self.rows:
-            websocket.send(self.formatter.format(row))
+            try:
+                websocket.send(self.formatter.format(row))
+            except ValueError:
+                print(f"bad logfile row (ignored): {row}", file=sys.stderr)
+                continue
             lines += 1
             self.progress_printer.report(lines)
         if not self.args.quiet:
@@ -296,7 +342,7 @@ def get_args():
 
     parser = argparse.ArgumentParser(
                         description="OpenCPN logfile replay tool",
-                        epilog=help_epilog,
+                        epilog=HELP_EPILOG,
                         formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument(
         "-r", "--role", choices=["tcp", "udp", "signalk"], default="tcp",

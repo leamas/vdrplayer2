@@ -14,7 +14,7 @@ classifiers = [
     "Programming Language :: Python :: 3",
     "Operating System :: OS Independent",
 ]
-dependencies = ["websocket-client"]
+dependencies = ["websockets"]
 
 [project.urls]
 Homepage = "https://github.com/leamas/vdrplayer2"
