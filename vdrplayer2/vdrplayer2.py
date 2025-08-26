@@ -19,10 +19,6 @@ Tool to replay log files created by the OpenCPN Data Monitor in
 VDR mode.
 
 Use vdrplayer2 -h for help
-
-Kudos: Dan Dickey a k a Transmitterdan for the original VDRplayer.py script
-at https://github.com/transmitterdan/VDRplayer.git which has been the
-inspiration for this.
 """
 
 import argparse
@@ -330,7 +326,7 @@ def get_args():
     # fmt: off
 
     parser = argparse.ArgumentParser(
-                        description="OpenCPN logfile replay tool",
+                        description="OpenCPN VDR mode logfiles replay tool",
                         formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument(
         "-r", "--role", choices=["tcp", "udp", "signalk"], default="tcp",
