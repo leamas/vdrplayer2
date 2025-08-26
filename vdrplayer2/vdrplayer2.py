@@ -40,15 +40,15 @@ from websockets.sync.server import serve
 
 assert sys.version_info >= (3, 10), "Must run in Python version 3.10 or above"
 
-HELP_EPILOG  = """Usage notes:
-Using -r tcp -m 0183 is somewhat tested and might work.
+HELP_EPILOG = """Usage notes:
+Using -r tcp -m 0183 is somewhat tested and might work. Same for -r udp 
+-m 0183
 
 Using -r signalk works, but is brittle. First disable the opencpn signalk
 connection, then start vdrplayer and finally enable the opencpn connection
 Use Data monitor to verify that the data is ok.
 
-Using -m 2000 is not implemented, will not work. The UDP code for -r udp is
-there but untested.
+Using -m 2000 is not implemented, will not work.
 """
 
 
@@ -276,7 +276,7 @@ class UdpClient:
         lines = 0
         for row in self.rows:
             dest = (self.args.destination, self.args.port)
-            s.sendto(dest, self.formatter.format(row))
+            s.sendto(self.formatter.format(row), dest)
             lines += 1
             self.progress_printer.report(lines)
         if not self.args.quiet:
