@@ -40,17 +40,6 @@ from websockets.sync.server import serve
 
 assert sys.version_info >= (3, 10), "Must run in Python version 3.10 or above"
 
-HELP_EPILOG = """Usage notes:
-Using -r tcp -m 0183 is somewhat tested and might work. Same for -r udp 
--m 0183
-
-Using -r signalk works, but is brittle. First disable the opencpn signalk
-connection, then start vdrplayer and finally enable the opencpn connection
-Use Data monitor to verify that the data is ok.
-
-Using -m 2000 is not implemented, will not work.
-"""
-
 
 class ProgressPrinter:
     """Report processed lines on stdout."""
@@ -193,7 +182,7 @@ class MsgFormat:
             payload: str = ""
             for w in row["raw_data"].split()[13 : 13 + payload_size]:
                 payload += w
-            rv = f"{hms.hour:02d}{hms.minute:02d}{hms.second:02d}"
+            rv = f"A{hms.hour:02d}{hms.minute:02d}{hms.second:02d}"
             rv += f".{int(hms.microsecond / 1000):03d}"
             rv += f" {ps:02X}{pf:02X}{prio:1X} {pgn:X} " + payload + "\r\n"
             return rv
@@ -342,7 +331,6 @@ def get_args():
 
     parser = argparse.ArgumentParser(
                         description="OpenCPN logfile replay tool",
-                        epilog=HELP_EPILOG,
                         formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument(
         "-r", "--role", choices=["tcp", "udp", "signalk"], default="tcp",
