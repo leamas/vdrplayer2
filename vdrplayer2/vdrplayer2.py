@@ -22,13 +22,13 @@ Use vdrplayer2 -h for help
 """
 
 import argparse
-import binascii
 import csv
 import socket
 import sys
 import threading
 import time
 
+from binascii import unhexlify
 from datetime import datetime
 from datetime import timezone
 
@@ -155,8 +155,7 @@ class MsgFormat:
 
             if not row.keys() & {"received_at", "raw_data"}:
                 return ""
-            data = row["raw_data"]
-            bytes_ = binascii.unhexlify(data.strip().replace(" ", ""))
+            bytes_ = unhexlify(row["raw_data"].strip().replace(" ", ""))
             ps = bytes_[3]
             pf = bytes_[4]
             rdp = bytes_[5] & 0b011
@@ -165,9 +164,8 @@ class MsgFormat:
                 pgn = (rdp << 16) + (pf << 8) + 0
             else:
                 pgn = (rdp << 16) + (pf << 8) + ps
-            ms = row["received_at"]
             try:
-                when = float(ms) / 1000
+                when = float(row["received_at"]) / 1000  # ms -> seconds
             except ValueError as exc:
                 raise ValueError(f"Bad timestamp in line: {row}") from exc
             try:
