@@ -22,6 +22,7 @@ Use vdrplayer2 -h for help
 """
 
 import argparse
+import binascii
 import csv
 import socket
 import sys
@@ -148,22 +149,8 @@ class MsgFormat:
         def format_signalk(row):
             return row["raw_data"] if "raw_data" in row.keys() else ""
 
-        def format_2000(row):
-            """Convert a line in the log to the Actisense ASCII formatA as of
-            https://actisense.com/knowledge-base/nmea-2000/w2k-1-nmea-2000-to-wifi-gateway/nmea-2000-ascii-output-format/
-            """
-
-            if not row.keys() & {"received_at", "raw_data"}:
-                return ""
-            bytes_ = unhexlify(row["raw_data"].strip().replace(" ", ""))
-            ps = bytes_[3]
-            pf = bytes_[4]
-            rdp = bytes_[5] & 0b011
-            prio = bytes_[5] & 0b011100 >> 2
-            if pf < 240:
-                pgn = (rdp << 16) + (pf << 8) + 0
-            else:
-                pgn = (rdp << 16) + (pf << 8) + ps
+        def get_actisense_timestamp(row):
+            """Convert log row timestamp to Actisense hh.mm.ss.mss format"""
             try:
                 when = float(row["received_at"]) / 1000  # ms -> seconds
             except ValueError as exc:
@@ -172,14 +159,51 @@ class MsgFormat:
                 hms = datetime.fromtimestamp(when, timezone.utc)
             except OSError as exc:
                 raise ValueError(f"Cannot convert timestamp {when}") from exc
-            payload_size = int(row["raw_data"].split()[12], 16)
+            rv = f"{hms.hour:02d}{hms.minute:02d}{hms.second:02d}"
+            return rv + f".{int(hms.microsecond / 1000):03d}"
+
+        def get_2000_payload(row):
+            """Extract the payload from an n2000 log row."""
+            octets = row["raw_data"].split()
+            if len(octets) < 14:
+                raise ValueError(
+                    "Not enough raw data in " + row["raw_data"]
+                )
+            size = int(octets[12], 16)
             payload: str = ""
-            for w in row["raw_data"].split()[13 : 13 + payload_size]:
+            for w in octets[13 : 13 + size]:
                 payload += w
-            rv = f"A{hms.hour:02d}{hms.minute:02d}{hms.second:02d}"
-            rv += f".{int(hms.microsecond / 1000):03d}"
-            rv += f" {ps:02X}{pf:02X}{prio:1X} {pgn:X} " + payload + "\r\n"
-            return rv
+            return payload
+
+        def format_2000(row):
+            """Convert a line in the log to the Actisense ASCII formatA as of
+            https://actisense.com/knowledge-base/nmea-2000/w2k-1-nmea-2000-to-wifi-gateway/nmea-2000-ascii-output-format/
+            """
+
+            if not row.keys() & {"received_at", "raw_data"}:
+                return ""
+            try:
+                bytes_ = unhexlify(row["raw_data"].strip().replace(" ", ""))
+            except binascii.Error as e:
+                raise ValueError(
+                    "Cannot decode n2000 payload in " + row["raw_data"]
+                ) from e
+            if len(bytes_) < 6:
+                raise ValueError(
+                    "Too small n2000 payload in " + row["raw_data"]
+                )
+            ps = bytes_[3]
+            pf = bytes_[4]
+            rdp = bytes_[5] & 0b011
+            prio = bytes_[5] & 0b011100 >> 2
+            if pf < 240:
+                pgn = (rdp << 16) + (pf << 8) + 0
+            else:
+                pgn = (rdp << 16) + (pf << 8) + ps
+            stamp = get_actisense_timestamp(row)
+            payload = get_2000_payload(row)
+            rv = f"A{stamp} {ps:02X}{pf:02X}{prio:1X} {pgn:X} " + payload
+            return rv + "\r\n"
 
         if self.msg_type == "0183":
             return format_0183(row).encode()
